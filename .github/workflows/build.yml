@@ -1,0 +1,92 @@
+# Builds an UNSIGNED PocketEars.ipa on GitHub's hosted macOS runner. SideStore signs
+# it on the phone. Every push to main also refreshes the rolling "latest" release,
+# so the IPA has a stable download URL:
+#   https://github.com/solluxcaptor429/pocketears/releases/download/latest/PocketEars.ipa
+name: Build IPA
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**/*.md']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Fallback if macos-26 queues or disappears: macos-15.
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project PocketEars.xcodeproj \
+            -target PocketEars \
+            -configuration Release \
+            -sdk iphoneos \
+            SYMROOT="$PWD/build" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            build 2>&1 | tee build.log | grep -E "error:|warning: .*PocketEars|BUILD (SUCCEEDED|FAILED)" || true
+          test -d build/Release-iphoneos/PocketEars.app
+
+      - name: Package the IPA
+        run: |
+          mkdir -p out/Payload
+          cp -R build/Release-iphoneos/PocketEars.app out/Payload/
+          (cd out && zip -qry PocketEars.ipa Payload)
+          ls -l out/PocketEars.ipa
+          /usr/libexec/PlistBuddy -c Print out/Payload/PocketEars.app/Info.plist
+          lipo -info out/Payload/PocketEars.app/PocketEars
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PocketEars-ipa
+          path: out/PocketEars.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Keep the build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Refresh the "latest" release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Unsigned build ${{ github.run_number }} from ${GITHUB_SHA::7}. Install with SideStore."
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest out/PocketEars.ipa --clobber
+            gh release edit latest --notes "$notes"
+          else
+            gh release create latest out/PocketEars.ipa --title "PocketEars (latest)" --notes "$notes" --target "$GITHUB_SHA" --prerelease
+          fi
