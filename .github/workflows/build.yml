@@ -60,6 +60,11 @@ jobs:
           ls -l out/PocketEars.ipa
           /usr/libexec/PlistBuddy -c Print out/Payload/PocketEars.app/Info.plist
           lipo -info out/Payload/PocketEars.app/PocketEars
+          # Phone-audio mode lives in the broadcast extension; fail if it wasn't embedded.
+          appex=out/Payload/PocketEars.app/PlugIns/PocketEarsBroadcast.appex
+          test -d "$appex"
+          /usr/libexec/PlistBuddy -c Print "$appex/Info.plist"
+          lipo -info "$appex/PocketEarsBroadcast"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

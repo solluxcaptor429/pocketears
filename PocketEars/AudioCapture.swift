@@ -11,22 +11,11 @@ final class AudioCapture {
 
     private let engine = AVAudioEngine()
     private var sink: AVAudioSinkNode?
-    private let ringSize = 1 << 15
-    private let ring: UnsafeMutablePointer<Float>
-    // Single writer (the audio thread), read from the analysis thread. A torn read
-    // costs one slightly-wrong visualizer frame, nothing more.
-    private var written = 0
-    private(set) var sampleRate: Double = 48_000
+    let ring = SampleRing()
     private(set) var isRunning = false
 
-    init() {
-        ring = .allocate(capacity: ringSize)
-        ring.initialize(repeating: 0, count: ringSize)
-    }
-
-    deinit { ring.deallocate() }
-
-    var totalWritten: Int { written }
+    var sampleRate: Double { ring.sampleRate }
+    var totalWritten: Int { ring.written }
 
     func start() throws {
         let session = AVAudioSession.sharedInstance()
@@ -41,21 +30,14 @@ final class AudioCapture {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw CaptureError.noInput }
-        sampleRate = format.sampleRate
+        ring.sampleRate = format.sampleRate
 
         let ring = self.ring
-        let mask = ringSize - 1
-        let node = AVAudioSinkNode { [unowned self] _, frames, abl -> OSStatus in
+        let node = AVAudioSinkNode { _, frames, abl -> OSStatus in
             let list = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: abl))
             guard let first = list.first, let data = first.mData else { return noErr }
             let src = data.assumingMemoryBound(to: Float.self)
-            let stride = Int(max(first.mNumberChannels, 1))
-            var w = self.written
-            for i in 0..<Int(frames) {
-                ring[w & mask] = src[i * stride]
-                w &+= 1
-            }
-            self.written = w
+            ring.append(src, count: Int(frames), stride: Int(max(first.mNumberChannels, 1)))
             return noErr
         }
         engine.attach(node)
@@ -78,15 +60,5 @@ final class AudioCapture {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
-    /// Copies the most recent `dst.count` samples into `dst`.
-    func copyLatest(into dst: inout [Float]) {
-        let count = dst.count
-        let w = written
-        let mask = ringSize - 1
-        var r = w - count
-        for i in 0..<count {
-            dst[i] = r >= 0 ? ring[r & mask] : 0
-            r += 1
-        }
-    }
+    func copyLatest(into dst: inout [Float]) { ring.copyLatest(into: &dst) }
 }

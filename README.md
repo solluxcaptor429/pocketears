@@ -1,9 +1,13 @@
 # PocketEars
 
-iPhone/iPad app that listens through the mic and drives the Pi LED sign's audio
-visualizer — the phone version of [BuddyEars](https://github.com/solluxcaptor429/buddyears).
-It speaks the sign's own protocol, so the sign needs no changes (v4.5.0+).
+iPhone/iPad app that drives the Pi LED sign's audio visualizer from the phone's mic
+**or from whatever the phone is playing** — the phone version of
+[BuddyEars](https://github.com/solluxcaptor429/buddyears). It speaks the sign's own
+protocol, so the sign needs no changes (v4.5.0+).
 
+- two sources: **Microphone** (the room) or **Phone audio** (Spotify, YouTube, games…
+  captured digitally through a ReplayKit broadcast extension; keeps running after you
+  leave the app)
 - 64 frames/s of 16 spectrum bands + a 64-point oscilloscope (`LSV2`, UDP 1236)
 - finds the sign on the Wi-Fi by itself, or use a fixed IP / `ledsign.local`
 - auto gain, sensitivity, noise floor and treble boost
@@ -19,6 +23,20 @@ It speaks the sign's own protocol, so the sign needs no changes (v4.5.0+).
 2. SideStore → My Apps → **+** → pick `PocketEars.ipa`.
 3. First launch: allow **Microphone** and **Local Network**. Without Local Network
    the app can't reach the sign.
+
+With a free Apple ID, SideStore needs two App IDs for this app (the app and its
+broadcast extension).
+
+## Phone audio mode
+
+Pick **Phone audio**, tap **Start phone audio**, then **Start Broadcast** in the iOS
+sheet. A red status-bar pill shows while it runs; tap it (or Stop in the app) to end.
+You can also start it from Control Center: long-press **Screen Recording** and choose
+PocketEars.
+
+iOS treats this as a screen broadcast, but PocketEars ignores the video and only
+analyses the audio. Audio protected by DRM, which includes **Apple Music**, reaches
+broadcast extensions as silence. Spotify, YouTube, podcasts and games work.
 
 ## Build
 

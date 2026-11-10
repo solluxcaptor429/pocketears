@@ -10,22 +10,31 @@ struct ContentView: View {
         NavigationStack {
             Form {
                 Section {
-                    SpectrumView(levels: model.levels, active: model.running)
+                    SpectrumView(levels: model.levels, active: model.isActive)
                         .frame(height: 170)
                         .listRowInsets(EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12))
+                    Picker("Source", selection: $model.source) {
+                        ForEach(AppModel.Source.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(model.isActive)
                     statusRow
-                    Button(action: model.toggle) {
-                        Label(model.running ? "Stop" : "Start listening",
-                              systemImage: model.running ? "stop.fill" : "waveform")
+                    Button(action: mainAction) {
+                        Label(mainTitle, systemImage: model.isActive ? "stop.fill" : mainIcon)
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(model.running ? .red : .accentColor)
+                    .tint(model.isActive ? .red : .accentColor)
+                    .background(BroadcastPickerHost().frame(width: 1, height: 1))
                     .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 12, trailing: 12))
                     if let err = model.errorText {
                         Text(err).font(.footnote).foregroundStyle(.red)
+                    }
+                } footer: {
+                    if model.source == .phoneAudio && !model.isActive {
+                        Text("Phone audio sends whatever other apps play: Spotify, YouTube, games. Apple Music and other DRM-protected audio come through silent. If the Start sheet doesn't open, long-press Screen Recording in Control Center and pick PocketEars.")
                     }
                 }
 
@@ -125,7 +134,7 @@ struct ContentView: View {
                 }
             }
             Spacer()
-            if model.running {
+            if model.isActive {
                 Text(String(format: "%+.0f dB", model.gainShown))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -133,8 +142,32 @@ struct ContentView: View {
         }
     }
 
+    private var mainTitle: String {
+        if model.isActive { return "Stop" }
+        return model.source == .microphone ? "Start listening" : "Start phone audio"
+    }
+
+    private var mainIcon: String {
+        model.source == .microphone ? "waveform" : "music.note.list"
+    }
+
+    private func mainAction() {
+        if model.broadcastLive {
+            model.stopBroadcast()
+        } else if model.running {
+            model.stop()
+        } else if model.source == .microphone {
+            model.start()
+        } else if !model.broadcastAvailable {
+            model.errorText = "This build has no broadcast extension. Reinstall the latest PocketEars.ipa."
+        } else if !BroadcastLauncher.shared.present() {
+            model.errorText = "Couldn't open the broadcast sheet. Long-press Screen Recording in Control Center and pick PocketEars."
+        }
+    }
+
     private var statusColor: Color {
-        guard model.running else { return .gray }
+        guard model.isActive else { return .gray }
+        if model.broadcastLive && !model.broadcastAudioFlowing { return .yellow }
         if model.link.connected { return .green }
         if model.link.manual && !model.link.ip.isEmpty { return .yellow }
         return .orange
@@ -142,7 +175,10 @@ struct ContentView: View {
 
     private var statusTitle: String {
         let l = model.link
-        guard model.running else { return "Stopped" }
+        guard model.isActive else { return "Stopped" }
+        if model.broadcastLive && !model.broadcastAudioFlowing {
+            return "Waiting for audio…"
+        }
         if l.connected { return "Sending to \(l.name.isEmpty ? "the sign" : l.name)" }
         if l.manual {
             if l.lookupFailed { return "Can't find \(model.signAddress)" }
@@ -154,7 +190,15 @@ struct ContentView: View {
 
     private var statusDetail: String? {
         let l = model.link
-        guard model.running else { return "Tap Start to feed the sign from this phone's mic." }
+        guard model.isActive else {
+            return model.source == .microphone
+                ? "Tap Start to feed the sign from this phone's mic."
+                : "Tap Start, then Start Broadcast. Keeps running after you leave the app."
+        }
+        if model.broadcastLive && !model.broadcastAudioFlowing {
+            let found = l.connected ? "Sign found at \(l.ip). " : ""
+            return found + "Play something in another app. Apple Music stays silent (DRM)."
+        }
         if l.connected { return "\(l.ip) · \(l.framesSent) frames" }
         if l.manual && !l.ip.isEmpty { return "\(l.framesSent) frames" }
         if !l.manual { return "Allow Local Network access if iOS asks." }

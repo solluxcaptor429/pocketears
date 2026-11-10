@@ -15,6 +15,10 @@ targets:
     platform: iOS
     sources:
       - PocketEars
+      - Shared
+    dependencies:
+      # Embedded into PocketEars.app/PlugIns. SideStore signs it with the app.
+      - target: PocketEarsBroadcast
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.solluxcaptor.pocketears
@@ -45,3 +49,33 @@ targets:
           - audio
         NSMicrophoneUsageDescription: PocketEars listens to the room and turns what it hears into the LED sign's visualizer. Audio never leaves your network and is not recorded.
         NSLocalNetworkUsageDescription: PocketEars finds the LED sign on your Wi-Fi and streams the visualizer to it.
+
+  # "Phone audio" mode: ReplayKit broadcast upload extension. iOS feeds it the audio
+  # every app is playing; it analyses it and drives the sign itself.
+  PocketEarsBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - PocketEarsBroadcast
+      - Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.solluxcaptor.pocketears.Broadcast
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+    info:
+      path: PocketEarsBroadcast/Info.plist
+      properties:
+        CFBundleDisplayName: PocketEars
+        CFBundleName: PocketEarsBroadcast
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSLocalNetworkUsageDescription: PocketEars finds the LED sign on your Wi-Fi and streams the visualizer to it.
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: SampleHandler
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer

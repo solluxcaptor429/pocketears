@@ -1,8 +1,14 @@
 import AVFoundation
+import Darwin
 import Observation
 import UIKit
 
-/// Ties the mic, the analyzer and the sign link together, and holds the settings.
+/// Ties the audio source, the analyzer and the sign link together, and holds the
+/// settings. Two sources:
+/// - Microphone: captured and analysed here in the app (as before).
+/// - Phone audio: a ReplayKit broadcast extension (PocketEarsBroadcast) captures
+///   what other apps play and feeds the sign itself. The app only mirrors its
+///   status and forwards settings, styles and messages over loopback (Bridge).
 @Observable
 final class AppModel {
     // Sign styles in BECM order -- led-sign's BUDDYEARS_VIZ_STYLES, which is
@@ -13,19 +19,46 @@ final class AppModel {
     static let effects = ["Scroll", "Static", "Bounce", "Blink", "Slide", "Type", "Rainbow",
                           "Pulse", "Wipe", "Chase", "Flip", "Sparkle", "Wave"]
 
+    enum Source: String, CaseIterable, Identifiable {
+        case microphone, phoneAudio
+        var id: String { rawValue }
+        var title: String { self == .microphone ? "Microphone" : "Phone audio" }
+    }
+
+    /// Bundle ID of the embedded broadcast extension, read from the app bundle at
+    /// run time because SideStore rewrites bundle IDs when it signs.
+    static let broadcastExtensionID: String? = {
+        guard let dir = Bundle.main.builtInPlugInsURL,
+              let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        else { return nil }
+        for url in items where url.pathExtension == "appex" {
+            guard let b = Bundle(url: url),
+                  let ext = b.object(forInfoDictionaryKey: "NSExtension") as? [String: Any],
+                  ext["NSExtensionPointIdentifier"] as? String == "com.apple.broadcast-services-upload"
+            else { continue }
+            return b.bundleIdentifier
+        }
+        return nil
+    }()
+
     // Live state for the UI
-    private(set) var running = false
+    private(set) var running = false            // microphone mode running
+    private(set) var broadcastLive = false      // phone-audio extension is reporting in
+    private(set) var broadcastAudioFlowing = false
     private(set) var levels = [Float](repeating: 0, count: SpectrumAnalyzer.bandCount)
     private(set) var gainShown: Float = 0
     private(set) var link = SignLink.Snapshot()
     var errorText: String?
 
+    var isActive: Bool { running || broadcastLive }
+
     // Settings (persisted)
+    var source: Source { didSet { save(); if source == .phoneAudio { primeLocalNetwork() } } }
     var autoGain: Bool { didSet { save(); pushSettings() } }
     var sensitivityDB: Double { didSet { save(); pushSettings() } }
     var floorDB: Double { didSet { save(); pushSettings() } }
     var tiltDB: Double { didSet { save(); pushSettings() } }
-    var signAddress: String { didSet { save(); signLink.setManualHost(signAddress) } }
+    var signAddress: String { didSet { save(); signLink.setManualHost(signAddress); pushSettings() } }
     var keepAwake: Bool { didSet { save(); applyIdleTimer() } }
     var messageEffect: Int { didSet { save() } }
     var messageSeconds: Double { didSet { save() } }
@@ -42,8 +75,16 @@ final class AppModel {
     @ObservationIgnored private var tickCount = 0
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
 
+    // Phone-audio bridge
+    @ObservationIgnored private let bridge = LoopbackSocket(port: Bridge.appPort)
+    @ObservationIgnored private var lastStatusAt = Date.distantPast
+    @ObservationIgnored private var knownSession: String?
+    @ObservationIgnored private var settingsVersion = Int.random(in: 1...1_000_000)
+    @ObservationIgnored private var livenessTimer: Timer?
+
     init() {
         let d = UserDefaults.standard
+        source = Source(rawValue: d.string(forKey: "source") ?? "") ?? .microphone
         autoGain = d.object(forKey: "autoGain") as? Bool ?? true
         sensitivityDB = d.object(forKey: "sensitivityDB") as? Double ?? 0
         floorDB = d.object(forKey: "floorDB") as? Double ?? -60
@@ -55,10 +96,21 @@ final class AppModel {
         pushSettings()
         signLink.setManualHost(signAddress)
         observeAudioSession()
+
+        bridge.onMessage = { [weak self] data in
+            guard let status = try? JSONDecoder().decode(Bridge.Status.self, from: data) else { return }
+            DispatchQueue.main.async { self?.handleStatus(status) }
+        }
+        bridge.open()
+        livenessTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.checkBroadcastLiveness()
+        }
+        if source == .phoneAudio { primeLocalNetwork() }
     }
 
     private func save() {
         let d = UserDefaults.standard
+        d.set(source.rawValue, forKey: "source")
         d.set(autoGain, forKey: "autoGain")
         d.set(sensitivityDB, forKey: "sensitivityDB")
         d.set(floorDB, forKey: "floorDB")
@@ -78,13 +130,21 @@ final class AppModel {
         settingsLock.lock()
         dspSettings = s
         settingsLock.unlock()
+        if broadcastLive { sendSettingsToBroadcast() }
     }
 
     private func applyIdleTimer() {
         UIApplication.shared.isIdleTimerDisabled = keepAwake && running
     }
 
-    // MARK: start / stop
+    /// The app came back to the foreground. A suspended app can lose its sockets,
+    /// so rebind the loopback listener.
+    func didBecomeActive() {
+        bridge.close()
+        bridge.open()
+    }
+
+    // MARK: microphone start / stop
 
     func toggle() {
         running ? stop() : start()
@@ -92,6 +152,10 @@ final class AppModel {
 
     func start() {
         guard !running else { return }
+        guard !broadcastLive else {
+            errorText = "Phone audio is already feeding the sign. Stop it first."
+            return
+        }
         errorText = nil
         AVAudioApplication.requestRecordPermission { granted in
             DispatchQueue.main.async {
@@ -117,7 +181,10 @@ final class AppModel {
         signLink.open()
         running = true
         applyIdleTimer()
+        startTimer()
+    }
 
+    private func startTimer() {
         let t = DispatchSource.makeTimerSource(flags: .strict, queue: dspQueue)
         t.schedule(deadline: .now(), repeating: 1.0 / 64.0, leeway: .milliseconds(1))
         t.setEventHandler { [weak self] in self?.step() }
@@ -169,20 +236,106 @@ final class AppModel {
         }
     }
 
+    // MARK: phone audio (broadcast extension)
+
+    var broadcastAvailable: Bool { Self.broadcastExtensionID != nil }
+
+    func stopBroadcast() {
+        bridge.send(Bridge.Control(kind: .stop), toPort: Bridge.extensionPort)
+    }
+
+    private var bridgeSettings: Bridge.Settings {
+        Bridge.Settings(autoGain: autoGain, sensitivityDB: sensitivityDB, floorDB: floorDB,
+                        tiltDB: tiltDB, signAddress: signAddress)
+    }
+
+    private func sendSettingsToBroadcast() {
+        settingsVersion += 1
+        bridge.send(Bridge.Control(kind: .settings, settings: bridgeSettings, settingsVersion: settingsVersion),
+                    toPort: Bridge.extensionPort)
+    }
+
+    private func handleStatus(_ s: Bridge.Status) {
+        lastStatusAt = Date()
+        if !broadcastLive {
+            broadcastLive = true
+            errorText = nil
+            if running { stop() }   // started from Control Center while the mic was on
+        }
+        // A new broadcast, or one that missed our last settings: send them again.
+        if s.session != knownSession || s.settingsVersion != settingsVersion {
+            knownSession = s.session
+            sendSettingsToBroadcast()
+        }
+        broadcastAudioFlowing = s.audioFlowing
+        levels = s.levels.map { Float($0) / 255 }
+        gainShown = s.gainDB
+        var snap = SignLink.Snapshot()
+        snap.connected = s.connected
+        snap.searching = !s.connected
+        snap.manual = s.manual
+        snap.lookupFailed = s.lookupFailed
+        snap.ip = s.ip
+        snap.name = s.name
+        snap.framesSent = s.framesSent
+        link = snap
+    }
+
+    private func checkBroadcastLiveness() {
+        guard broadcastLive, Date().timeIntervalSince(lastStatusAt) > 1.5 else { return }
+        broadcastLive = false
+        broadcastAudioFlowing = false
+        knownSession = nil
+        levels = [Float](repeating: 0, count: SpectrumAnalyzer.bandCount)
+        link = SignLink.Snapshot()
+    }
+
+    /// The broadcast extension can't show the Local Network prompt itself, so the
+    /// app sends one harmless datagram on the LAN (UDP discard port) to get iOS to
+    /// ask while the app is on screen. Nothing listens there; it's never a BEHI.
+    private func primeLocalNetwork() {
+        guard UserDefaults.standard.bool(forKey: "localNetworkPrimed") == false,
+              let net = SignLink.localSubnet(), let host = net.hosts.first(where: { $0 != net.own }) else { return }
+        UserDefaults.standard.set(true, forKey: "localNetworkPrimed")
+        let s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+        guard s >= 0 else { return }
+        defer { Darwin.close(s) }
+        var a = sockaddr_in()
+        a.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        a.sin_family = sa_family_t(AF_INET)
+        a.sin_port = UInt16(9).bigEndian
+        a.sin_addr.s_addr = host.bigEndian
+        var byte: UInt8 = 0
+        _ = withUnsafePointer(to: &a) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                sendto(s, &byte, 1, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+    }
+
     // MARK: sign controls
 
     func setStyle(_ index: Int) {
         guard index >= 0, index < Self.styles.count else { return }
-        signLink.sendCommand(opcode: 1, arg: UInt8(index))
+        if broadcastLive {
+            bridge.send(Bridge.Control(kind: .style, style: index), toPort: Bridge.extensionPort)
+        } else {
+            signLink.sendCommand(opcode: 1, arg: UInt8(index))
+        }
     }
 
     func sendMessage(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        signLink.sendText(trimmed, effect: UInt8(messageEffect), seconds: messageSeconds)
+        if broadcastLive {
+            bridge.send(Bridge.Control(kind: .text, text: trimmed, effect: messageEffect, seconds: messageSeconds),
+                        toPort: Bridge.extensionPort)
+        } else {
+            signLink.sendText(trimmed, effect: UInt8(messageEffect), seconds: messageSeconds)
+        }
     }
 
-    var canTalkToSign: Bool { running && (link.connected || (link.manual && !link.ip.isEmpty)) }
+    var canTalkToSign: Bool { isActive && (link.connected || (link.manual && !link.ip.isEmpty)) }
 
     // MARK: audio session events
 
@@ -226,10 +379,6 @@ final class AppModel {
         }
         analyzer = SpectrumAnalyzer(sampleRate: capture.sampleRate)
         lastWritten = capture.totalWritten
-        let t = DispatchSource.makeTimerSource(flags: .strict, queue: dspQueue)
-        t.schedule(deadline: .now(), repeating: 1.0 / 64.0, leeway: .milliseconds(1))
-        t.setEventHandler { [weak self] in self?.step() }
-        timer = t
-        t.resume()
+        startTimer()
     }
 }
