@@ -196,6 +196,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
         let s = currentSettings()
         var d = SpectrumAnalyzer.Settings()
         d.autoGain = s.autoGain
+        d.balanceBands = s.balanceBands
         d.gainDB = Float(s.sensitivityDB)
         d.floorDB = Float(s.floorDB)
         d.tiltDBPerOctave = Float(s.tiltDB)

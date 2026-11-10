@@ -22,7 +22,7 @@ final class AppModel {
     enum Source: String, CaseIterable, Identifiable {
         case microphone, phoneAudio
         var id: String { rawValue }
-        var title: String { self == .microphone ? "Microphone" : "Phone audio" }
+        var title: String { self == .microphone ? "Listen" : "Phone audio" }
     }
 
     /// Bundle ID of the embedded broadcast extension, read from the app bundle at
@@ -55,6 +55,7 @@ final class AppModel {
     // Settings (persisted)
     var source: Source { didSet { save(); if source == .phoneAudio { primeLocalNetwork() } } }
     var autoGain: Bool { didSet { save(); pushSettings() } }
+    var balanceBands: Bool { didSet { save(); pushSettings() } }
     var sensitivityDB: Double { didSet { save(); pushSettings() } }
     var floorDB: Double { didSet { save(); pushSettings() } }
     var tiltDB: Double { didSet { save(); pushSettings() } }
@@ -86,6 +87,7 @@ final class AppModel {
         let d = UserDefaults.standard
         source = Source(rawValue: d.string(forKey: "source") ?? "") ?? .microphone
         autoGain = d.object(forKey: "autoGain") as? Bool ?? true
+        balanceBands = d.object(forKey: "balanceBands") as? Bool ?? true
         sensitivityDB = d.object(forKey: "sensitivityDB") as? Double ?? 0
         floorDB = d.object(forKey: "floorDB") as? Double ?? -60
         tiltDB = d.object(forKey: "tiltDB") as? Double ?? 3
@@ -112,6 +114,7 @@ final class AppModel {
         let d = UserDefaults.standard
         d.set(source.rawValue, forKey: "source")
         d.set(autoGain, forKey: "autoGain")
+        d.set(balanceBands, forKey: "balanceBands")
         d.set(sensitivityDB, forKey: "sensitivityDB")
         d.set(floorDB, forKey: "floorDB")
         d.set(tiltDB, forKey: "tiltDB")
@@ -124,6 +127,7 @@ final class AppModel {
     private func pushSettings() {
         var s = SpectrumAnalyzer.Settings()
         s.autoGain = autoGain
+        s.balanceBands = balanceBands
         s.gainDB = Float(sensitivityDB)
         s.floorDB = Float(floorDB)
         s.tiltDBPerOctave = Float(tiltDB)
@@ -245,7 +249,7 @@ final class AppModel {
     }
 
     private var bridgeSettings: Bridge.Settings {
-        Bridge.Settings(autoGain: autoGain, sensitivityDB: sensitivityDB, floorDB: floorDB,
+        Bridge.Settings(autoGain: autoGain, balanceBands: balanceBands, sensitivityDB: sensitivityDB, floorDB: floorDB,
                         tiltDB: tiltDB, signAddress: signAddress)
     }
 

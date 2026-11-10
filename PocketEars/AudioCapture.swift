@@ -19,11 +19,16 @@ final class AudioCapture {
 
     func start() throws {
         let session = AVAudioSession.sharedInstance()
-        // playAndRecord + mixWithOthers: music playing on this phone keeps playing.
-        // measurement mode turns off the voice processing / AGC that would flatten
-        // the dynamics the visualizer is trying to show.
+        // playAndRecord + mixWithOthers: music playing on this phone (Apple Music
+        // included) keeps playing. measurement mode turns off the voice processing /
+        // AGC / echo cancelling that would flatten the dynamics or cancel out the
+        // phone's own speaker. allowBluetoothA2DP + allowAirPlay keep that music on
+        // a Bluetooth or AirPlay speaker; without them, recording would pull the
+        // route back to the phone. (Not allowBluetooth: that is the low-quality
+        // hands-free profile.)
         try session.setCategory(.playAndRecord, mode: .measurement,
-                                options: [.mixWithOthers, .defaultToSpeaker])
+                                options: [.mixWithOthers, .defaultToSpeaker,
+                                          .allowBluetoothA2DP, .allowAirPlay])
         try? session.setPreferredIOBufferDuration(0.005)
         try session.setActive(true)
 

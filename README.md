@@ -27,6 +27,15 @@ protocol, so the sign needs no changes (v4.5.0+).
 With a free Apple ID, SideStore needs two App IDs for this app (the app and its
 broadcast extension).
 
+## Apple Music
+
+Use **Listen** (the microphone source). Start the music, open PocketEars, tap
+**Start listening**, and leave. It keeps running with the app closed and the screen
+locked, Apple Music keeps playing, and output stays on the phone speaker, Bluetooth
+or AirPlay. Auto gain copes with the mic sitting right next to the phone's own
+speaker, and **Balance bands** brings back the bass a phone speaker can't play.
+Headphones are the one case it can't hear.
+
 ## Phone audio mode
 
 Pick **Phone audio**, tap **Start phone audio**, then **Start Broadcast** in the iOS

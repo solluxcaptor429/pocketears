@@ -53,6 +53,10 @@ signs it). Check a run with `gh run list -R solluxcaptor429/pocketears`.
 - ReplayKit app audio may be big-endian Int16 interleaved; `SampleHandler` reads the ASBD
   flags and handles Int16/Int32/Float32, either endianness, interleaved or not.
 - DRM audio (Apple Music) reaches ReplayKit as silence. Nothing in the app can fix that.
+  The Apple Music path is mic mode ("Listen"): measurement mode (no echo cancel) hears the
+  phone's own speaker; `.allowBluetoothA2DP`/`.allowAirPlay` keep music on external speakers.
+- Auto gain is bidirectional (-24..+18 dB); `balanceBands` adds up to 12 dB per band
+  from per-band slow envelopes. Both live in `SpectrumAnalyzer` and apply to both sources.
 - Extensions can't show the Local Network prompt; the app primes it once with a
   1-byte datagram to UDP port 9 when phone-audio mode is chosen. Never a BEHI.
 - Broadcast extensions have a ~50 MB memory cap. Keep the extension lean.

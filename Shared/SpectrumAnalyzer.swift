@@ -19,6 +19,9 @@ final class SpectrumAnalyzer {
         var tiltDBPerOctave: Float = 3
         var gainDB: Float = 0
         var autoGain = true
+        /// Lift bands that stay quiet relative to the loudest (e.g. the bass a phone
+        /// speaker can't reproduce) so every column of the sign moves.
+        var balanceBands = true
     }
 
     struct Output {
@@ -44,6 +47,7 @@ final class SpectrumAnalyzer {
     private var tilt = [Float](repeating: 0, count: SpectrumAnalyzer.bandCount)
     private var tiltSetting: Float = -1
     private var envelopeDB: Float = -30
+    private var bandEnvDB = [Float](repeating: -60, count: SpectrumAnalyzer.bandCount)
     private let waveSpan: Int
 
     init(sampleRate: Double) {
@@ -145,9 +149,11 @@ final class SpectrumAnalyzer {
             rawDB[b] = 20 * log10(m / refMag + 1e-9) + tilt[b]
         }
 
-        // Auto gain: a phone across the room hears far less than a line feed. Track
-        // the loudest band (fast up, ~2 dB/s down) and lift it toward the top of the
-        // bars, capped so a quiet room doesn't turn into a wall of noise.
+        // Auto gain: track the loudest band (fast up, ~2 dB/s down) and move it toward
+        // the top of the bars. Lifts a phone across the room by up to 18 dB (capped
+        // so a quiet room doesn't turn into a wall of noise), and turns a hot source
+        // -- the mic right next to the phone's own speaker, or full-scale digital
+        // audio -- down by up to 24 dB so the bars don't sit pinned at the top.
         var auto: Float = 0
         if s.autoGain {
             let loudest = rawDB.max() ?? -90
@@ -157,14 +163,32 @@ final class SpectrumAnalyzer {
                 envelopeDB = max(envelopeDB - 0.03, -60)
             }
             let target = s.floorDB * 0.12
-            auto = min(max(target - envelopeDB, 0), 18)
+            auto = min(max(target - envelopeDB, -24), 18)
         }
         let gain = auto + s.gainDB
         out.appliedGainDB = gain
 
+        // Band balance: each band keeps its own slow envelope; bands that sit well
+        // below the loudest band's envelope get up to 12 dB back.
+        var lift = [Float](repeating: 0, count: Self.bandCount)
+        for b in 0..<Self.bandCount {
+            let r = rawDB[b]
+            if r > bandEnvDB[b] {
+                bandEnvDB[b] += (r - bandEnvDB[b]) * 0.1
+            } else {
+                bandEnvDB[b] = max(bandEnvDB[b] - 0.01, -90)
+            }
+        }
+        if s.balanceBands {
+            let top = (bandEnvDB.max() ?? -90) - 6
+            for b in 0..<Self.bandCount {
+                lift[b] = min(max(top - bandEnvDB[b], 0), 12)
+            }
+        }
+
         let span = -s.floorDB
         for b in 0..<Self.bandCount {
-            let v = min(max((rawDB[b] + gain - s.floorDB) / span, 0), 1)
+            let v = min(max((rawDB[b] + gain + lift[b] - s.floorDB) / span, 0), 1)
             out.levels[b] = v
             out.bands[b] = UInt8(v * 255 + 0.5)
         }

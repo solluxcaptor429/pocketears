@@ -13,6 +13,7 @@ enum Bridge {
 
     struct Settings: Codable, Equatable {
         var autoGain = true
+        var balanceBands = true
         var sensitivityDB = 0.0
         var floorDB = -60.0
         var tiltDB = 3.0

@@ -33,13 +33,18 @@ struct ContentView: View {
                         Text(err).font(.footnote).foregroundStyle(.red)
                     }
                 } footer: {
-                    if model.source == .phoneAudio && !model.isActive {
-                        Text("Phone audio sends whatever other apps play: Spotify, YouTube, games. Apple Music and other DRM-protected audio come through silent. If the Start sheet doesn't open, long-press Screen Recording in Control Center and pick PocketEars.")
+                    if !model.isActive {
+                        if model.source == .microphone {
+                            Text("Works with Apple Music. Start music, then come here and tap Start. It keeps listening with the app closed and the screen locked, and music stays on your speaker, Bluetooth or AirPlay.")
+                        } else {
+                            Text("Captures other apps digitally: Spotify, YouTube, games. Apple Music is DRM-protected and comes through silent here; use Listen for it. If the Start sheet doesn't open, long-press Screen Recording in Control Center and pick PocketEars.")
+                        }
                     }
                 }
 
                 Section {
                     Toggle("Auto gain", isOn: $model.autoGain)
+                    Toggle("Balance bands", isOn: $model.balanceBands)
                     LabeledSlider(title: "Sensitivity", value: $model.sensitivityDB,
                                   range: -12...24, format: { String(format: "%+.0f dB", $0) })
                     LabeledSlider(title: "Noise floor", value: $model.floorDB,
@@ -49,7 +54,7 @@ struct ContentView: View {
                 } header: {
                     Text("Levels")
                 } footer: {
-                    Text("Auto gain lifts quiet rooms toward the top of the bars. Raise the noise floor if the sign flickers in silence.")
+                    Text("Auto gain keeps the bars in range whether the phone hears a quiet room or its own speaker. Balance bands lifts ranges that stay quiet, like the bass a phone speaker can't play. Raise the noise floor if the sign flickers in silence.")
                 }
 
                 Section("Visualizer style") {
@@ -192,12 +197,12 @@ struct ContentView: View {
         let l = model.link
         guard model.isActive else {
             return model.source == .microphone
-                ? "Tap Start to feed the sign from this phone's mic."
+                ? "Hears the phone's speaker or the room. Works with Apple Music."
                 : "Tap Start, then Start Broadcast. Keeps running after you leave the app."
         }
         if model.broadcastLive && !model.broadcastAudioFlowing {
             let found = l.connected ? "Sign found at \(l.ip). " : ""
-            return found + "Play something in another app. Apple Music stays silent (DRM)."
+            return found + "Play something in another app. For Apple Music, stop and use Listen."
         }
         if l.connected { return "\(l.ip) · \(l.framesSent) frames" }
         if l.manual && !l.ip.isEmpty { return "\(l.framesSent) frames" }
